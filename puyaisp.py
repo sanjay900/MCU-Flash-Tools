@@ -38,42 +38,52 @@
 #   to VCC, then pull nRST (PF2) shortly to GND (or press and hold the BOOT button,
 #   then press and release the RESET button and then release the BOOT button, if
 #   your board has them).
-# These steps are not necessary when using a CH340X USB-to-serial converter with 
-# control lines for nRST and BOOT0. In this case, the software automatically puts 
+# These steps are not necessary when using a CH340X USB-to-serial converter with
+# control lines for nRST and BOOT0. In this case, the software automatically puts
 # the MCU into bootloader mode.
 #
 # Run "python3 puyaisp.py -f firmware.bin".
 
 # If the PID/VID of the USB-to-Serial converter is known, it can be defined here,
 # which can make the auto-detection a lot faster. If not, comment out or delete.
-#PY_VID  = '1A86'
-#PY_PID  = '7523'
+# PY_VID  = '2e8a'
+# PY_PID  = '000c'
 
 # Define BAUD rate here, range: 4800 - 1000000, default and recommended: 115200
+from serial.tools.list_ports import comports
+from serial import Serial
+import math
+import serial
+import argparse
+import time
+import sys
 PY_BAUD = 115200
 
 # Libraries
-import sys
-import time
-import argparse
-import serial
-from serial import Serial
-from serial.tools.list_ports import comports
 
 # ===================================================================================
 # Main Function
 # ===================================================================================
 
+
 def _main():
     # Parse command line arguments
-    parser = argparse.ArgumentParser(description='Minimal command line interface for PY32 IAP')
-    parser.add_argument('-u', '--unlock',   action='store_true', help='unlock chip (remove read protection)')
-    parser.add_argument('-l', '--lock',     action='store_true', help='lock chip (set read protection)')
-    parser.add_argument('-e', '--erase',    action='store_true', help='perform chip erase (implied with -f)')
-    parser.add_argument('-o', '--rstoption',action='store_true', help='reset option bytes')
-    parser.add_argument('-G', '--nrstgpio', action='store_true', help='make nRST pin a GPIO pin')
-    parser.add_argument('-R', '--nrstreset',action='store_true', help='make nRST pin a RESET pin')
-    parser.add_argument('-f', '--flash',    help='write BIN file to flash and verify')
+    parser = argparse.ArgumentParser(
+        description='Minimal command line interface for PY32 IAP')
+    parser.add_argument('-u', '--unlock',   action='store_true',
+                        help='unlock chip (remove read protection)')
+    parser.add_argument('-l', '--lock',     action='store_true',
+                        help='lock chip (set read protection)')
+    parser.add_argument('-e', '--erase',    action='store_true',
+                        help='perform chip erase (implied with -f)')
+    parser.add_argument('-o', '--rstoption',
+                        action='store_true', help='reset option bytes')
+    parser.add_argument('-G', '--nrstgpio', action='store_true',
+                        help='make nRST pin a GPIO pin')
+    parser.add_argument('-R', '--nrstreset', action='store_true',
+                        help='make nRST pin a RESET pin')
+    parser.add_argument(
+        '-f', '--flash',    help='write BIN file to flash and verify')
     args = parser.parse_args(sys.argv[1:])
 
     # Check arguments
@@ -115,16 +125,21 @@ def _main():
         isp.readoption()
         print('SUCCESS:', isp.optionstr + '.')
 
-        # Perform chip erase
-        if (args.erase) or (args.flash is not None):
+        # # Perform chip erase
+        if (args.erase):
             print('Performing chip erase ...')
             isp.erase()
             print('SUCCESS: Chip is erased.')
-
         # Flash binary file
         if args.flash is not None:
             print('Flashing', args.flash, 'to MCU ...')
-            with open(args.flash, 'rb') as f: data = f.read()
+            with open(args.flash, 'rb') as f:
+                data = f.read()
+            sectors = range(1, math.ceil(len(data)/PY_SECTORSIZE)+1)
+
+            print('Performing sector erase ...')
+            isp.erasesectors(sectors)
+            print('Flashing ...')
             isp.writeflash(PY_CODE_ADDR, data)
             print('Verifying ...')
             isp.verifyflash(PY_CODE_ADDR, data)
@@ -163,11 +178,12 @@ def _main():
 # Programmer Class
 # ===================================================================================
 
+
 class Programmer(Serial):
     def __init__(self):
         # BAUD rate:  4800 - 1000000bps (default: 115200), will be auto-detected
         # Data frame: 1 start bit, 8 data bit, 1 parity bit set to even, 1 stop bit
-        super().__init__(baudrate = PY_BAUD, parity = serial.PARITY_EVEN, timeout = 1)
+        super().__init__(baudrate=PY_BAUD, parity=serial.PARITY_EVEN, timeout=1)
         self.identify()
 
     # Identify port of programmer and enter programming mode
@@ -192,25 +208,26 @@ class Programmer(Serial):
     def sendcommand(self, command):
         self.write([command, command ^ 0xff])
         if not self.checkreply():
-            raise Exception('Device has not acknowledged the command 0x%02x' % command)
+            raise Exception(
+                'Device has not acknowledged the command 0x%02x' % command)
 
     # Send address
     def sendaddress(self, addr):
-        stream = addr.to_bytes(4, byteorder='big')
+        stream = list(addr.to_bytes(4, byteorder='big'))
         parity = 0x00
-        for x in range(4):
-            parity ^= stream[x]
+        for x in stream:
+            parity ^= x
+        stream += [parity]
         self.write(stream)
-        self.write([parity])
         if not self.checkreply():
-            raise Exception('Failed to send address')
+            raise Exception(f'Failed to send address, {hex(addr)}')
 
     # Check if device acknowledged
     def checkreply(self):
         reply = self.read(1)
         return (len(reply) == 1 and reply[0] == PY_REPLY_ACK)
 
-    #--------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
 
     # Start bootloader
     def boot(self):
@@ -228,7 +245,7 @@ class Programmer(Serial):
         time.sleep(0.01)
         self.rts = False
         self.close()
-        
+
     # Start firmware and disconnect
     def run(self):
         self.sendcommand(PY_CMD_GO)
@@ -236,7 +253,7 @@ class Programmer(Serial):
         self.dtr = True
         self.close()
 
-    #--------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
 
     # Read info stream
     def readinfostream(self, command):
@@ -249,9 +266,10 @@ class Programmer(Serial):
 
     # Get chip info
     def readinfo(self):
-        self.ver    = self.readinfostream(PY_CMD_GET)[0]
+        self.ver = self.readinfostream(PY_CMD_GET)[0]
         self.verstr = '%x.%x' % (self.ver >> 4, self.ver & 7)
-        self.pid    = int.from_bytes(self.readinfostream(PY_CMD_PID), byteorder='big')
+        self.pid = int.from_bytes(
+            self.readinfostream(PY_CMD_PID), byteorder='big')
 
     # Read UID
     def readuid(self):
@@ -263,10 +281,11 @@ class Programmer(Serial):
             self.option = list(self.readflash(PY_OPTION_ADDR, 16))
         except:
             raise Exception('Chip is locked')
+        print([hex(x) for x in self.option])
         self.optionstr = 'OPTR: 0x%04x, SDKR: 0x%04x, WRPR: 0x%04x' % \
-                         (( (self.option[ 0] << 8) + self.option[ 1], \
-                            (self.option[ 4] << 8) + self.option[ 5], \
-                            (self.option[12] << 8) + self.option[13] ))
+                         (((self.option[0] << 8) + self.option[1],
+                           (self.option[4] << 8) + self.option[5],
+                           (self.option[12] << 8) + self.option[13]))
 
     # Write OPTION bytes
     def writeoption(self):
@@ -278,8 +297,8 @@ class Programmer(Serial):
 
     # Set read protection in OPTION bytes
     def lock(self):
-        self.option[0]  = 0x55
-        self.option[2]  = 0xaa
+        self.option[0] = 0x55
+        self.option[2] = 0xaa
 
     # Set nRST pin as GPIO in OPTION bytes
     def nrst2gpio(self):
@@ -297,7 +316,7 @@ class Programmer(Serial):
         if not self.checkreply():
             raise Exception('Failed to unlock chip')
 
-    #--------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
 
     # Erase whole chip
     def erase(self):
@@ -306,12 +325,31 @@ class Programmer(Serial):
         if not self.checkreply():
             raise Exception('Failed to erase chip')
 
+    # Erase sectors
+
+    def erasesectors(self, sectors):
+        self.sendcommand(PY_CMD_ERASE)
+        print("a")
+        stream = [0x20,len(sectors)-1]
+        print(stream)
+        stream += [x for sector in sectors for x in sector.to_bytes(
+            2, byteorder='big')]
+        parity = 0x00
+        for x in stream:
+            parity ^= x
+        stream += [parity]
+        self.write(stream)
+        if not self.checkreply():
+            raise Exception('Failed to send sector list')
+
+
     # Read flash
     def readflash(self, addr, size):
         data = bytes()
         while size > 0:
             blocksize = size
-            if blocksize > PY_BLOCKSIZE: blocksize = PY_BLOCKSIZE
+            if blocksize > PY_BLOCKSIZE:
+                blocksize = PY_BLOCKSIZE
             self.sendcommand(PY_CMD_READ)
             self.sendaddress(addr)
             self.sendcommand(blocksize - 1)
@@ -325,11 +363,16 @@ class Programmer(Serial):
         size = len(data)
         while size > 0:
             blocksize = size
-            if blocksize > PY_BLOCKSIZE: blocksize = PY_BLOCKSIZE
-            block = data[:blocksize]
+            if blocksize > PY_BLOCKSIZE:
+                blocksize = PY_BLOCKSIZE
+            block = list(data[:blocksize])
+            # pad out last block
+            if blocksize < PY_BLOCKSIZE:
+                block += [0xff] * (PY_BLOCKSIZE - blocksize)
+                blocksize = PY_BLOCKSIZE
             parity = blocksize - 1
-            for x in range(blocksize):
-                parity ^= block[x]
+            for x in block:
+                parity ^= x
             self.sendcommand(PY_CMD_WRITE)
             self.sendaddress(addr)
             self.write([blocksize - 1])
@@ -337,7 +380,7 @@ class Programmer(Serial):
             self.write([parity])
             if not self.checkreply():
                 raise Exception('Failed to write to address 0x%08x' % addr)
-            data  = data[blocksize:]
+            data = data[blocksize:]
             addr += blocksize
             size -= blocksize
 
@@ -351,37 +394,39 @@ class Programmer(Serial):
 # Device Constants
 # ===================================================================================
 
+
 # Device and Memory constants
-PY_CHIP_PID     = 0x440
-PY_BLOCKSIZE    = 128
-PY_FLASH_ADDR   = 0x08000000
-PY_CODE_ADDR    = 0x08000000
-PY_SRAM_ADDR    = 0x20000000
-PY_BOOT_ADDR    = 0x1fff0000
-PY_UID_ADDR     = 0x1fff0e00
-PY_OPTION_ADDR  = 0x1fff0e80
-PY_CONFIG_ADDR  = 0x1fff0f00
+PY_CHIP_PID = 0x0064
+PY_BLOCKSIZE = 128
+PY_SECTORSIZE = 4096
+PY_FLASH_ADDR = 0x08000000
+PY_CODE_ADDR = 0x08001000
+PY_SRAM_ADDR = 0x20000000
+PY_BOOT_ADDR = 0x08000000
+PY_UID_ADDR = 0x1fff0e00
+PY_OPTION_ADDR = 0x1fff0080
+PY_CONFIG_ADDR = 0x1fff0f00
 
 # Command codes
-PY_CMD_GET      = 0x00
-PY_CMD_VER      = 0x01
-PY_CMD_PID      = 0x02
-PY_CMD_READ     = 0x11
-PY_CMD_WRITE    = 0x31
-PY_CMD_ERASE    = 0x44
-PY_CMD_GO       = 0x21
-PY_CMD_W_LOCK   = 0x63
+PY_CMD_GET = 0x00
+PY_CMD_VER = 0x01
+PY_CMD_PID = 0x02
+PY_CMD_READ = 0x11
+PY_CMD_WRITE = 0x31
+PY_CMD_ERASE = 0x44
+PY_CMD_GO = 0x21
+PY_CMD_W_LOCK = 0x63
 PY_CMD_W_UNLOCK = 0x73
-PY_CMD_R_LOCK   = 0x82
+PY_CMD_R_LOCK = 0x82
 PY_CMD_R_UNLOCK = 0x92
 
 # Reply codes
-PY_REPLY_ACK    = 0x79
-PY_REPLY_NACK   = 0x1f
-PY_REPLY_BUSY   = 0xaa
+PY_REPLY_ACK = 0x79
+PY_REPLY_NACK = 0x1f
+PY_REPLY_BUSY = 0xaa
 
 # Other codes
-PY_SYNCH        = 0x7f
+PY_SYNCH = 0x7f
 
 # Default option bytes
 PY_OPTION_DEFAULT = b'\xaa\xbe\x55\x41\xff\x00\x00\xff\xff\xff\xff\xff\xff\xff\x00\x00'
