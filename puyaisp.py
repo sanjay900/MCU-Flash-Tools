@@ -57,6 +57,7 @@ import serial
 import argparse
 import time
 import sys
+from intelhex import IntelHex
 PY_BAUD = 115200
 
 # Libraries
@@ -90,7 +91,7 @@ def _main():
     if not any( (args.rstoption, args.unlock, args.lock, args.erase, args.nrstgpio, args.nrstreset, args.flash) ):
         print('No arguments - no action!')
         sys.exit(0)
-
+    
     # Establish connection to MCU via USB-to-serial converter
     try:
         print('Connecting to MCU via USB-to-serial converter ...')
@@ -133,8 +134,16 @@ def _main():
         # Flash binary file
         if args.flash is not None:
             print('Flashing', args.flash, 'to MCU ...')
-            with open(args.flash, 'rb') as f:
-                data = f.read()
+            data = None
+            if args.flash.endswith("hex"):
+                ih = IntelHex(args.flash)
+                data = ih.tobinarray()
+            if args.flash.endswith("bin"):
+                with open(args.flash, 'rb') as f:
+                    data = f.read()
+            if not data:
+                print('Unknown file format for', args.flash)
+                return
             sectors = range(1, math.ceil(len(data)/PY_SECTORSIZE)+1)
 
             print('Performing sector erase ...')
